@@ -2350,6 +2350,7 @@ function closePhotoViewer() {
 
 // ========== 扫码 ==========
 let scanReader = null;   // ZXing 识别器（替代 BarcodeDetector，兼容微信/iOS）
+let scanStream = null;   // 摄像头媒体流
 let lastScanCode = null;
 
 // ========== 条码商品查询 ==========
@@ -2468,8 +2469,24 @@ async function openScanner() {
 }
 
 async function startCameraScan() {
+  const video = document.getElementById('scan-video');
   try {
-    // 开启 TRY_HARDER 提升识别率 + 限定常见格式减少误识别
+    // 1. 手动获取摄像头（可捕获具体错误，避免 ZXing 内部吞错）
+    const constraints = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    };
+    scanStream = await navigator.mediaDevices.getUserMedia(constraints);
+    // 2. playsinline 是微信 WebView 播放 video 的必需属性
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    video.setAttribute('muted', 'true');
+    video.srcObject = scanStream;
+    await video.play();
+    // 3. 初始化 ZXing reader
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
@@ -2478,24 +2495,14 @@ async function startCameraScan() {
       ZXing.BarcodeFormat.EAN_8,
       ZXing.BarcodeFormat.CODE_128,
       ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.CODE_93,
       ZXing.BarcodeFormat.UPC_A,
       ZXing.BarcodeFormat.UPC_E,
       ZXing.BarcodeFormat.ITF,
-      ZXing.BarcodeFormat.DATA_MATRIX,
-      ZXing.BarcodeFormat.PDF_417
+      ZXing.BarcodeFormat.DATA_MATRIX
     ]);
     scanReader = new ZXing.BrowserMultiFormatReader(hints);
-    const video = document.getElementById('scan-video');
-    // 后置摄像头，1280×720 是所有手机都支持的视频分辨率，条码识别够用
-    const constraints = {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      }
-    };
-    scanReader.decodeFromConstraints(constraints, video, (result, err) => {
+    // 4. 用已有 video 元素开始识别（比 decodeFromConstraints 更可控）
+    scanReader.decodeFromVideoElement(video, (result, err) => {
       if (result) {
         const code = result.text;
         if (code && code !== lastScanCode) {
@@ -2503,10 +2510,15 @@ async function startCameraScan() {
           handleScanResult(code);
         }
       }
+      // err 是 NotFoundException，每帧正常触发，忽略
     });
-    document.getElementById('scan-hint').textContent = '将条形码/二维码对准框内，自动识别';
+    document.getElementById('scan-hint').textContent = '将条码/二维码对准框内，自动识别';
   } catch (e) {
-    document.getElementById('scan-hint').textContent = '摄像头启动失败，可手动输入条码';
+    const msg = e.name === 'NotAllowedError' ? '摄像头权限被拒，请在设置中允许相机' :
+                e.name === 'NotFoundError' ? '未找到摄像头设备' :
+                e.name === 'NotReadableError' ? '摄像头被占用或不可用' :
+                '摄像头启动失败: ' + (e.message || e.name);
+    document.getElementById('scan-hint').textContent = msg;
   }
 }
 
@@ -2514,6 +2526,10 @@ function stopCameraScan() {
   if (scanReader) {
     try { scanReader.reset(); } catch (e) {}
     scanReader = null;
+  }
+  if (scanStream) {
+    scanStream.getTracks().forEach(t => t.stop());
+    scanStream = null;
   }
 }
 
