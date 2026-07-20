@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#10b981"/>
+  <g transform="translate(96,96)">
+    <!-- 盒子主体 -->
+    <rect x="32" y="80" width="256" height="224" rx="16" fill="#ffffff"/>
+    <!-- 盒子盖 -->
+    <path d="M16 80 L160 16 L304 80 L160 144 Z" fill="#d1fae5"/>
+    <!-- 左侧折页 -->
+    <path d="M32 80 L160 144 L160 320 L32 256 Z" fill="#a7f3d0" opacity="0.7"/>
+    <!-- 右侧折页 -->
+    <path d="M288 80 L160 144 L160 320 L288 256 Z" fill="#6ee7b7" opacity="0.7"/>
+    <!-- 清单线条 -->
+    <rect x="96" y="176" width="96" height="8" rx="4" fill="#10b981"/>
+    <rect x="96" y="200" width="64" height="8" rx="4" fill="#10b981" opacity="0.6"/>
+    <circle cx="84" cy="180" r="6" fill="#10b981"/>
+    <circle cx="84" cy="204" r="6" fill="#10b981" opacity="0.6"/>
+  </g>
+</svg>
