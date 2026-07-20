@@ -1174,6 +1174,9 @@ a { color: inherit; text-decoration: none; }
           <div class="scan-overlay"></div>
         </div>
         <div class="scan-hint" id="scan-hint">将条形码/二维码对准框内，自动识别</div>
+        <div style="text-align:center;margin-top:4px;" id="scan-photo-btn-wrap">
+          <button class="btn btn-secondary" onclick="triggerPhotoScan()" style="font-size:12px;padding:6px 16px;">📷 拍照识别</button>
+        </div>
         <div class="scan-result" id="scan-result">
           <div>✅ 扫码成功</div>
           <div class="scan-result-code" id="scan-result-code"></div>
@@ -2617,6 +2620,11 @@ async function queryAndShowProduct(code) {
     infoBox.innerHTML = '<span style="color:var(--text-light,#888);font-size:12px;">未查到商品信息，可手动填写名称（条码已记录）</span>';
     document.getElementById('scan-hint').textContent = '识别成功！未匹配商品，需手动补充信息';
   }
+}
+
+function triggerPhotoScan() {
+  document.getElementById('photo-scan-input').value = '';
+  document.getElementById('photo-scan-input').click();
 }
 
 function handleManualBarcode() {
