@@ -2448,8 +2448,8 @@ async function imageUrlToDataUrl(url) {
   } catch (e) { return null; }
 }
 
-function isWeChat() {
-  return /MicroMessenger/i.test(navigator.userAgent || '');
+function isMobile() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
 }
 
 function isScannerSupported() {
@@ -2463,8 +2463,8 @@ async function openScanner() {
   document.getElementById('scan-use-btn').style.display = 'none';
   document.getElementById('manual-barcode').value = '';
   document.getElementById('scanner-manual').style.display = '';
-  // 微信内置浏览器：用拍照识别（getUserMedia 实时视频流在微信里不工作）
-  if (isWeChat()) {
+  // 手机端：拍照识别（彻底绕过 getUserMedia 实时视频流兼容问题）
+  if (isMobile()) {
     document.getElementById('scanner-support').style.display = '';
     document.getElementById('scanner-unsupported').style.display = 'none';
     document.getElementById('scan-hint').textContent = '即将打开相机拍照...';
