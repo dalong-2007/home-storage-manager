@@ -1206,6 +1206,9 @@ a { color: inherit; text-decoration: none; }
   </div>
 </div>
 
+<!-- 拍照识别隐藏 input（微信环境使用） -->
+<input type="file" id="photo-scan-input" accept="image/*" capture="environment" style="display:none;" onchange="handlePhotoScan(this.files)">
+
 <!-- Photo Viewer -->
 <div class="photo-viewer" id="photo-viewer" onclick="closePhotoViewer()">
   <button class="photo-viewer-close" onclick="closePhotoViewer()">×</button>
@@ -2445,6 +2448,10 @@ async function imageUrlToDataUrl(url) {
   } catch (e) { return null; }
 }
 
+function isWeChat() {
+  return /MicroMessenger/i.test(navigator.userAgent || '');
+}
+
 function isScannerSupported() {
   return !!(window.ZXing && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
@@ -2455,16 +2462,22 @@ async function openScanner() {
   document.getElementById('scan-result').classList.remove('show');
   document.getElementById('scan-use-btn').style.display = 'none';
   document.getElementById('manual-barcode').value = '';
-  if (isScannerSupported()) {
+  document.getElementById('scanner-manual').style.display = '';
+  // 微信内置浏览器：用拍照识别（getUserMedia 实时视频流在微信里不工作）
+  if (isWeChat()) {
     document.getElementById('scanner-support').style.display = '';
     document.getElementById('scanner-unsupported').style.display = 'none';
-    document.getElementById('scanner-manual').style.display = '';
+    document.getElementById('scan-hint').textContent = '即将打开相机拍照...';
+    document.getElementById('photo-scan-input').value = '';
+    setTimeout(function(){ document.getElementById('photo-scan-input').click(); }, 400);
+  } else if (isScannerSupported()) {
+    document.getElementById('scanner-support').style.display = '';
+    document.getElementById('scanner-unsupported').style.display = 'none';
     document.getElementById('scan-hint').textContent = '正在启动摄像头...';
     setTimeout(startCameraScan, 300);
   } else {
     document.getElementById('scanner-support').style.display = 'none';
     document.getElementById('scanner-unsupported').style.display = '';
-    document.getElementById('scanner-manual').style.display = '';
   }
 }
 
@@ -2535,6 +2548,7 @@ function stopCameraScan() {
 
 function closeScanner() {
   stopCameraScan();
+  document.getElementById('photo-scan-input').value = '';
   closeModal('modal-scanner');
 }
 
@@ -2584,6 +2598,53 @@ function handleManualBarcode() {
   if (!code) { toast('请输入条码'); return; }
   lastScanCode = code;
   handleScanResult(code);
+}
+
+// 拍照识别（微信环境使用，兼容所有手机浏览器）
+async function handlePhotoScan(files) {
+  if (!files || !files[0]) return;
+  const file = files[0];
+  document.getElementById('scan-hint').textContent = '正在识别照片中的条码...';
+  try {
+    // 读取照片为 dataURL
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = function() { resolve(r.result); };
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    // 加载到图片元素
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise(function(resolve, reject) {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    // ZXing 解码图片
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.DATA_MATRIX
+    ]);
+    const photoReader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await photoReader.decodeFromImageElement(img);
+    if (result && result.text) {
+      lastScanCode = result.text;
+      handleScanResult(result.text);
+      return;
+    }
+    document.getElementById('scan-hint').textContent = '未识别到条码，请重拍或手动输入';
+  } catch (e) {
+    document.getElementById('scan-hint').textContent = '识别失败，请重拍或手动输入';
+  }
 }
 
 async function useScanResult() {

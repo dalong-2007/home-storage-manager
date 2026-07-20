@@ -1,5 +1,5 @@
-// 家用收纳管家 - Service Worker v1.7
-const CACHE_NAME = 'home-storage-v1.7';
+// 家用收纳管家 - Service Worker v1.8
+const CACHE_NAME = 'home-storage-v1.8';
 const ASSETS = ['./', './index.html', './manifest.json', './icon.svg', './zxing.js'];
 
 self.addEventListener('install', (event) => {
