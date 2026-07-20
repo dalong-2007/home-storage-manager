@@ -2606,21 +2606,39 @@ async function handlePhotoScan(files) {
   const file = files[0];
   document.getElementById('scan-hint').textContent = '正在识别照片中的条码...';
   try {
-    // 读取照片为 dataURL
+    // 1. 读取照片
     const dataUrl = await new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = function() { resolve(r.result); };
       r.onerror = reject;
       r.readAsDataURL(file);
     });
-    // 加载到图片元素
-    const img = new Image();
+    // 2. 加载原图
+    let img = new Image();
     img.src = dataUrl;
     await new Promise(function(resolve, reject) {
       img.onload = resolve;
       img.onerror = reject;
     });
-    // ZXing 解码图片
+    // 3. 缩放到合理尺寸（手机拍照 4000×3000 太大，ZXing 处理不动）
+    const MAX = 800;
+    if (img.width > MAX || img.height > MAX) {
+      const c = document.createElement('canvas');
+      const ratio = Math.min(MAX / img.width, MAX / img.height);
+      c.width = Math.round(img.width * ratio);
+      c.height = Math.round(img.height * ratio);
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const thumbData = c.toDataURL('image/jpeg', 0.85);
+      const thumb = new Image();
+      thumb.src = thumbData;
+      await new Promise(function(resolve, reject) {
+        thumb.onload = resolve;
+        thumb.onerror = reject;
+      });
+      img = thumb;
+    }
+    // 4. ZXing 解码（TRY_HARDER 在 800px 内很快）
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
@@ -2641,9 +2659,9 @@ async function handlePhotoScan(files) {
       handleScanResult(result.text);
       return;
     }
-    document.getElementById('scan-hint').textContent = '未识别到条码，请重拍或手动输入';
+    document.getElementById('scan-hint').textContent = '未识别到条码，请重拍（条码占画面 1/3 以上）';
   } catch (e) {
-    document.getElementById('scan-hint').textContent = '识别失败，请重拍或手动输入';
+    document.getElementById('scan-hint').textContent = '识别失败: ' + (e.message || e.name || '未知');
   }
 }
 
