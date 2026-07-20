@@ -2487,12 +2487,12 @@ async function startCameraScan() {
     ]);
     scanReader = new ZXing.BrowserMultiFormatReader(hints);
     const video = document.getElementById('scan-video');
-    // 高分辨率 + 后置摄像头，条码细密图案需要高清晰度才能识别
+    // 后置摄像头，1280×720 是所有手机都支持的视频分辨率，条码识别够用
     const constraints = {
       video: {
         facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
       }
     };
     scanReader.decodeFromConstraints(constraints, video, (result, err) => {
