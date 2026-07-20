@@ -2404,6 +2404,30 @@ async function lookupProductCN(barcode) {
   } catch (e) { return null; }
 }
 
+// 官方条码查询（apizero.cn barcode-gs1，直通中国物品编码中心，仅 69 开头，匿名 2 次/天）
+async function lookupProductGS1(barcode) {
+  if (!/^\d{8,14}$/.test(barcode) || !barcode.startsWith('69')) return null;
+  try {
+    const url = 'https://v1.apizero.cn/api/barcode-gs1?code=' + encodeURIComponent(barcode);
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.code !== 0 || !data.data || !data.data.found) return null;
+    const p = data.data;
+    const name = p.name || p.product_name || '';
+    if (!name) return null;
+    let category = '';
+    if (/食|饮|奶|茶|水|面|米|油|糖|酒|啤|调味/.test(name)) category = 'food';
+    return {
+      name: name,
+      brand: p.brand || p.manufacturer || p.company_name || '',
+      category: category,
+      imageUrl: p.image || p.product_image || '',
+      spec: p.spec || p.net_content || ''
+    };
+  } catch (e) { return null; }
+}
+
 // Open Food Facts 开源数据库（免费、无需 key、CORS 友好，进口商品覆盖好）
 async function lookupProductOnline(barcode) {
   if (!/^\d{8,14}$/.test(barcode)) return null;   // 仅 EAN/UPC 数字条码查询
@@ -2423,12 +2447,14 @@ async function lookupProductOnline(barcode) {
   } catch (e) { return null; }
 }
 
-// 组合查询：先查本地记忆（秒回），再查 apizero.cn（中国商品），最后 Open Food Facts（进口商品）
+// 组合查询：本地记忆 → apizero 公开库 → apizero 官方库(gs1) → Open Food Facts
 async function lookupProduct(barcode) {
   const db = getBarcodeDB();
   if (db[barcode] && db[barcode].name) return { ...db[barcode], source: 'local' };
   const cn = await lookupProductCN(barcode);
   if (cn) { rememberBarcode(barcode, cn); return { ...cn, source: 'online' }; }
+  const gs1 = await lookupProductGS1(barcode);
+  if (gs1) { rememberBarcode(barcode, gs1); return { ...gs1, source: 'gs1' }; }
   const online = await lookupProductOnline(barcode);
   if (online) { rememberBarcode(barcode, online); return { ...online, source: 'online' }; }
   return null;
@@ -2577,7 +2603,7 @@ async function queryAndShowProduct(code) {
   const product = await lookupProduct(code);
   lastScanProduct = product;
   if (product) {
-    const src = product.source === 'local' ? '本地记忆' : '在线数据库';
+    const src = product.source === 'local' ? '本地记忆' : product.source === 'gs1' ? '官方数据库' : '在线数据库';
     const imgHtml = product.imageUrl
       ? `<img src="${product.imageUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;background:#eee;" onerror="this.style.display='none'">`
       : `<div style="width:48px;height:48px;background:#eee;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:24px;">📦</div>`;
