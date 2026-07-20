@@ -1025,6 +1025,7 @@ a { color: inherit; text-decoration: none; }
     <div class="modal-body">
       <form id="item-form" onsubmit="saveItem(event)">
         <input type="hidden" id="form-id">
+        <input type="hidden" id="form-barcode">
         <div class="form-group">
           <label class="form-label">物品名称 <span class="required">*</span></label>
           <input type="text" class="form-input" id="form-name" required maxlength="50" placeholder="如：金龙鱼食用油">
@@ -1177,6 +1178,7 @@ a { color: inherit; text-decoration: none; }
           <div>✅ 扫码成功</div>
           <div class="scan-result-code" id="scan-result-code"></div>
           <div id="scan-result-dup" style="margin-top:6px;"></div>
+          <div id="scan-product-info" style="margin-top:8px;"></div>
         </div>
       </div>
       <div id="scanner-unsupported" style="display:none;">
@@ -1642,6 +1644,7 @@ function setFilter(type, value) {
 function openItemForm(id) {
   document.getElementById('item-form').reset();
   document.getElementById('form-id').value = '';
+  document.getElementById('form-barcode').value = '';
   document.getElementById('form-purchaseDate').value = todayStr();
   document.getElementById('form-duplicate-warning').innerHTML = '';
   document.getElementById('form-title').textContent = id ? '编辑物品' : '添加物品';
@@ -1654,6 +1657,7 @@ function openItemForm(id) {
     const item = state.items.find(i => i.id === id);
     if (!item) return;
     document.getElementById('form-id').value = item.id;
+    document.getElementById('form-barcode').value = item.barcode || '';
     document.getElementById('form-name').value = item.name;
     document.getElementById('form-category').value = item.category;
     document.getElementById('form-quantity').value = item.quantity;
@@ -1711,6 +1715,7 @@ function saveItem(event) {
 
   const data = {
     name: name,
+    barcode: document.getElementById('form-barcode').value.trim() || '',
     category: document.getElementById('form-category').value,
     quantity: Number(document.getElementById('form-quantity').value) || 1,
     unit: document.getElementById('form-unit').value.trim() || '个',
@@ -1751,6 +1756,10 @@ function saveItem(event) {
   }
   pendingPhotoDataUrl = null;
   editingItemId = null;
+  // 记忆条码→商品映射，下次扫到同样条码秒回
+  if (data.barcode && data.name) {
+    rememberBarcode(data.barcode, { name: data.name, brand: data.notes, category: data.category, imageUrl: '' });
+  }
   saveData();
   closeModal('modal-item-form');
   refreshCurrentPage();
@@ -2343,6 +2352,71 @@ function closePhotoViewer() {
 let scanReader = null;   // ZXing 识别器（替代 BarcodeDetector，兼容微信/iOS）
 let lastScanCode = null;
 
+// ========== 条码商品查询 ==========
+const BARCODE_DB_KEY = 'homeStorageBarcodeDB_v1';
+let lastScanProduct = null;   // 缓存上次扫码查到的商品，供 useScanResult 使用
+
+function getBarcodeDB() {
+  try { return JSON.parse(localStorage.getItem(BARCODE_DB_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function saveBarcodeDB(db) {
+  try { localStorage.setItem(BARCODE_DB_KEY, JSON.stringify(db)); } catch (e) {}
+}
+function rememberBarcode(barcode, info) {
+  if (!barcode || !info || !info.name) return;
+  const db = getBarcodeDB();
+  db[barcode] = { name: info.name, brand: info.brand || '', category: info.category || '', imageUrl: info.imageUrl || '', ts: Date.now() };
+  const keys = Object.keys(db);
+  if (keys.length > 500) {
+    keys.sort((a, b) => (db[a].ts || 0) - (db[b].ts || 0));
+    keys.slice(0, keys.length - 500).forEach(k => delete db[k]);
+  }
+  saveBarcodeDB(db);
+}
+
+// Open Food Facts 开源数据库（免费、无需 key、CORS 友好）
+async function lookupProductOnline(barcode) {
+  if (!/^\d{8,14}$/.test(barcode)) return null;   // 仅 EAN/UPC 数字条码查询
+  try {
+    const url = 'https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(barcode) + '.json?fields=product_name,product_name_zh,generic_name,brands,categories,image_url,image_front_small_url';
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.status !== 1 || !data.product) return null;
+    const p = data.product;
+    const name = p.product_name_zh || p.product_name || '';
+    if (!name) return null;
+    let category = '';
+    const cats = (p.categories || '').toLowerCase();
+    if (cats && /food|beverage|dairy|snack|meat|drink|grocery|bakery|fruit|vegetable/.test(cats)) category = 'food';
+    return { name: name, brand: p.brands || '', category: category, imageUrl: p.image_front_small_url || p.image_url || '' };
+  } catch (e) { return null; }
+}
+
+// 组合查询：先查本地记忆（秒回），没有再查在线
+async function lookupProduct(barcode) {
+  const db = getBarcodeDB();
+  if (db[barcode] && db[barcode].name) return { ...db[barcode], source: 'local' };
+  const online = await lookupProductOnline(barcode);
+  if (online) { rememberBarcode(barcode, online); return { ...online, source: 'online' }; }
+  return null;
+}
+
+// 把网络图片转成 dataURL（照片存 IndexedDB 需要 dataURL）
+async function imageUrlToDataUrl(url) {
+  try {
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) { return null; }
+}
+
 function isScannerSupported() {
   return !!(window.ZXing && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
@@ -2400,18 +2474,40 @@ function closeScanner() {
 
 function handleScanResult(code) {
   stopCameraScan();
+  lastScanProduct = null;
   document.getElementById('scan-result-code').textContent = code;
-  const matchByName = state.items.filter(i => i.status === 'in_stock' && i.name === code);
+  // 重复检查：按 barcode 匹配，兼容老数据（曾把条码当 name）
+  const matchByCode = state.items.filter(i => i.status === 'in_stock' && (i.barcode === code || i.name === code));
   const dupBox = document.getElementById('scan-result-dup');
-  if (matchByName.length > 0) {
-    dupBox.innerHTML = `<span style="color:var(--warning);">⚠️ 库存中已有同名物品 ${matchByName.length} 条，共 ${matchByName.reduce((s,i)=>s+Number(i.quantity),0)} 件，建议先消耗</span>`;
+  if (matchByCode.length > 0) {
+    dupBox.innerHTML = `<span style="color:var(--warning);">⚠️ 库存中已有此商品 ${matchByCode.length} 条，共 ${matchByCode.reduce((s,i)=>s+Number(i.quantity),0)} 件，建议先消耗</span>`;
   } else {
-    dupBox.innerHTML = `<span style="color:var(--primary);">✓ 库存中无同名物品，可放心添加</span>`;
+    dupBox.innerHTML = `<span style="color:var(--primary);">✓ 库存中无此商品，可放心添加</span>`;
   }
   document.getElementById('scan-result').classList.add('show');
   document.getElementById('scan-use-btn').style.display = '';
-  document.getElementById('scan-hint').textContent = '识别成功！可继续扫描或点击下方按钮添加';
+  document.getElementById('scan-hint').textContent = '识别成功！正在查询商品信息...';
   if (navigator.vibrate) navigator.vibrate(200);
+  queryAndShowProduct(code);
+}
+
+async function queryAndShowProduct(code) {
+  const infoBox = document.getElementById('scan-product-info');
+  infoBox.innerHTML = '<span style="color:var(--text-light);font-size:12px;">🔍 正在查询商品信息...</span>';
+  const product = await lookupProduct(code);
+  lastScanProduct = product;
+  if (product) {
+    const src = product.source === 'local' ? '本地记忆' : '在线数据库';
+    const imgHtml = product.imageUrl
+      ? `<img src="${product.imageUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;background:#eee;" onerror="this.style.display='none'">`
+      : `<div style="width:48px;height:48px;background:#eee;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:24px;">📦</div>`;
+    const brandHtml = product.brand ? `<div style="font-size:11px;color:var(--text-light,#888);">品牌：${escapeHtml(product.brand)}</div>` : '';
+    infoBox.innerHTML = `<div style="background:var(--bg-card,#f8f9fa);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px;display:flex;gap:10px;align-items:center;">${imgHtml}<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;word-break:break-word;">${escapeHtml(product.name)}</div>${brandHtml}<div style="font-size:10px;color:var(--text-light,#aaa);margin-top:2px;">✓ ${src}已识别，点击下方按钮自动填入</div></div></div>`;
+    document.getElementById('scan-hint').textContent = '识别成功！已匹配商品，点击下方按钮添加';
+  } else {
+    infoBox.innerHTML = '<span style="color:var(--text-light,#888);font-size:12px;">未查到商品信息，可手动填写名称（条码已记录）</span>';
+    document.getElementById('scan-hint').textContent = '识别成功！未匹配商品，需手动补充信息';
+  }
 }
 
 function handleManualBarcode() {
@@ -2421,14 +2517,37 @@ function handleManualBarcode() {
   handleScanResult(code);
 }
 
-function useScanResult() {
+async function useScanResult() {
   const code = lastScanCode;
+  const product = lastScanProduct;
   closeScanner();
   openItemForm();
-  document.getElementById('form-name').value = code;
-  document.getElementById('form-name').focus();
-  document.getElementById('form-name').select();
-  toast('已填入条码，请补充物品信息');
+  document.getElementById('form-barcode').value = code || '';
+  if (product && product.name) {
+    document.getElementById('form-name').value = product.name;
+    if (product.brand) document.getElementById('form-notes').value = product.brand;
+    if (product.category) {
+      const sel = document.getElementById('form-category');
+      if (sel && Array.from(sel.options).some(o => o.value === product.category)) {
+        sel.value = product.category;
+        toggleExpiryField();
+      }
+    }
+    if (product.imageUrl) {
+      toast('已填入商品信息，正在加载图片...');
+      imageUrlToDataUrl(product.imageUrl).then(dataUrl => {
+        if (dataUrl) { pendingPhotoDataUrl = dataUrl; renderPhotoPreview(); }
+      });
+    } else {
+      toast('已填入商品信息');
+    }
+    document.getElementById('form-quantity').focus();
+    document.getElementById('form-quantity').select();
+  } else {
+    document.getElementById('form-name').value = '';
+    document.getElementById('form-name').focus();
+    toast('已记录条码，请填写物品名称');
+  }
 }
 
 // ========== 推送提醒 ==========
