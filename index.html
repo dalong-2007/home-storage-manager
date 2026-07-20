@@ -2375,7 +2375,32 @@ function rememberBarcode(barcode, info) {
   saveBarcodeDB(db);
 }
 
-// Open Food Facts 开源数据库（免费、无需 key、CORS 友好）
+// 中国商品条码查询（apizero.cn，覆盖国内商品 >95%，匿名每天 20 次）
+async function lookupProductCN(barcode) {
+  if (!/^\d{8,14}$/.test(barcode)) return null;
+  try {
+    const url = 'https://v1.apizero.cn/api/barcode-lookup?barcode=' + encodeURIComponent(barcode);
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.code !== 0 || !data.data || !data.data.found) return null;
+    const p = data.data;
+    const name = p.name || '';
+    if (!name) return null;
+    // apizero 不返回分类，简单按名称关键词推断是否食品
+    let category = '';
+    if (/食|饮|奶|茶|水|面|米|油|糖|酒|啤|调味|零食|饼干|面包|肉|鱼|菜|果|粉|粥|酱|醋/.test(name)) category = 'food';
+    return {
+      name: name,
+      brand: p.brand || p.manufacturer || '',
+      category: category,
+      imageUrl: p.image || '',
+      spec: p.spec || ''
+    };
+  } catch (e) { return null; }
+}
+
+// Open Food Facts 开源数据库（免费、无需 key、CORS 友好，进口商品覆盖好）
 async function lookupProductOnline(barcode) {
   if (!/^\d{8,14}$/.test(barcode)) return null;   // 仅 EAN/UPC 数字条码查询
   try {
@@ -2394,10 +2419,12 @@ async function lookupProductOnline(barcode) {
   } catch (e) { return null; }
 }
 
-// 组合查询：先查本地记忆（秒回），没有再查在线
+// 组合查询：先查本地记忆（秒回），再查 apizero.cn（中国商品），最后 Open Food Facts（进口商品）
 async function lookupProduct(barcode) {
   const db = getBarcodeDB();
   if (db[barcode] && db[barcode].name) return { ...db[barcode], source: 'local' };
+  const cn = await lookupProductCN(barcode);
+  if (cn) { rememberBarcode(barcode, cn); return { ...cn, source: 'online' }; }
   const online = await lookupProductOnline(barcode);
   if (online) { rememberBarcode(barcode, online); return { ...online, source: 'online' }; }
   return null;
@@ -2442,9 +2469,32 @@ async function openScanner() {
 
 async function startCameraScan() {
   try {
-    scanReader = new ZXing.BrowserMultiFormatReader();
+    // 开启 TRY_HARDER 提升识别率 + 限定常见格式减少误识别
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.PDF_417
+    ]);
+    scanReader = new ZXing.BrowserMultiFormatReader(hints);
     const video = document.getElementById('scan-video');
-    const constraints = { video: { facingMode: { ideal: 'environment' } } };
+    // 高分辨率 + 后置摄像头，条码细密图案需要高清晰度才能识别
+    const constraints = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
+    };
     scanReader.decodeFromConstraints(constraints, video, (result, err) => {
       if (result) {
         const code = result.text;
@@ -2501,8 +2551,11 @@ async function queryAndShowProduct(code) {
     const imgHtml = product.imageUrl
       ? `<img src="${product.imageUrl}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;background:#eee;" onerror="this.style.display='none'">`
       : `<div style="width:48px;height:48px;background:#eee;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:24px;">📦</div>`;
-    const brandHtml = product.brand ? `<div style="font-size:11px;color:var(--text-light,#888);">品牌：${escapeHtml(product.brand)}</div>` : '';
-    infoBox.innerHTML = `<div style="background:var(--bg-card,#f8f9fa);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px;display:flex;gap:10px;align-items:center;">${imgHtml}<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;word-break:break-word;">${escapeHtml(product.name)}</div>${brandHtml}<div style="font-size:10px;color:var(--text-light,#aaa);margin-top:2px;">✓ ${src}已识别，点击下方按钮自动填入</div></div></div>`;
+    const metaParts = [];
+    if (product.brand) metaParts.push('品牌：' + escapeHtml(product.brand));
+    if (product.spec) metaParts.push('规格：' + escapeHtml(product.spec));
+    const metaHtml = metaParts.length ? `<div style="font-size:11px;color:var(--text-light,#888);">${metaParts.join(' · ')}</div>` : '';
+    infoBox.innerHTML = `<div style="background:var(--bg-card,#f8f9fa);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:10px;display:flex;gap:10px;align-items:center;">${imgHtml}<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;word-break:break-word;">${escapeHtml(product.name)}</div>${metaHtml}<div style="font-size:10px;color:var(--text-light,#aaa);margin-top:2px;">✓ ${src}已识别，点击下方按钮自动填入</div></div></div>`;
     document.getElementById('scan-hint').textContent = '识别成功！已匹配商品，点击下方按钮添加';
   } else {
     infoBox.innerHTML = '<span style="color:var(--text-light,#888);font-size:12px;">未查到商品信息，可手动填写名称（条码已记录）</span>';
@@ -2525,7 +2578,10 @@ async function useScanResult() {
   document.getElementById('form-barcode').value = code || '';
   if (product && product.name) {
     document.getElementById('form-name').value = product.name;
-    if (product.brand) document.getElementById('form-notes').value = product.brand;
+    const notesParts = [];
+    if (product.brand) notesParts.push(product.brand);
+    if (product.spec) notesParts.push(product.spec);
+    if (notesParts.length) document.getElementById('form-notes').value = notesParts.join(' ');
     if (product.category) {
       const sel = document.getElementById('form-category');
       if (sel && Array.from(sel.options).some(o => o.value === product.category)) {
