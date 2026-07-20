@@ -2638,28 +2638,44 @@ async function handlePhotoScan(files) {
       });
       img = thumb;
     }
-    // 4. ZXing 解码（TRY_HARDER 在 800px 内很快）
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.QR_CODE,
-      ZXing.BarcodeFormat.EAN_13,
-      ZXing.BarcodeFormat.EAN_8,
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.UPC_A,
-      ZXing.BarcodeFormat.UPC_E,
-      ZXing.BarcodeFormat.ITF,
-      ZXing.BarcodeFormat.DATA_MATRIX
-    ]);
-    const photoReader = new ZXing.BrowserMultiFormatReader(hints);
-    const result = await photoReader.decodeFromImageElement(img);
-    if (result && result.text) {
-      lastScanCode = result.text;
-      handleScanResult(result.text);
+    // 4. 解码：优先 BarcodeDetector（原生 API，快），降级 ZXing
+    let code = null;
+    if ('BarcodeDetector' in window) {
+      try {
+        const detector = new BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code', 'data_matrix', 'itf']
+        });
+        const codes = await detector.detect(img);
+        if (codes && codes.length > 0) { code = codes[0].rawValue; }
+      } catch (bde) { /* BarcodeDetector 失败，降级 */ }
+    }
+    if (!code) {
+      let zxImg = img;
+      // ZXing 对画布 decode 更可靠：把 img 画到 canvas 上再 decode
+      const zc = document.createElement('canvas');
+      zc.width = zxImg.width;
+      zc.height = zxImg.height;
+      const zctx = zc.getContext('2d');
+      zctx.drawImage(zxImg, 0, 0);
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.UPC_A,
+        ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.DATA_MATRIX
+      ]);
+      const zxReader = new ZXing.BrowserMultiFormatReader(hints);
+      try {
+        const result = await zxReader.decodeFromImageElement(zxImg);
+        if (result && result.text) code = result.text;
+      } catch (zxe) { /* ZXing 也失败 */ }
+    }
+    if (code) {
+      lastScanCode = code;
+      handleScanResult(code);
       return;
     }
-    document.getElementById('scan-hint').textContent = '未识别到条码，请重拍（条码占画面 1/3 以上）';
+    document.getElementById('scan-hint').textContent = '未识别到条码，请重拍（条码占画面 1/3 以上，光线充足）';
   } catch (e) {
     document.getElementById('scan-hint').textContent = '识别失败: ' + (e.message || e.name || '未知');
   }
